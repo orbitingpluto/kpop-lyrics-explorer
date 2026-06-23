@@ -51,15 +51,15 @@ def load_data():
     load csv data, agency map, generation map, group type map
 
     """
-    df = pd.read_csv("csv/kpop_lyrics_clean.csv")
+    df = pd.read_csv("data/processed/kpop_lyrics_clean.csv")
     df["year"] = df["date"].str[:4]
     df = df[(df["year"] >= "2010") & (df["year"] <= "2025")]
 
-    with open("json/agency_map.json") as f:
+    with open("data/processed/agency_map.json") as f:
         agency_map = json.load(f)
-    with open("json/gen_map.json") as f:
+    with open("data/processed/gen_map.json") as f:
         gen_map = json.load(f)
-    with open("json/group_type_map_ccl.json") as f:
+    with open("data/processed/group_type_map_ccl.json") as f:
         group_type_map = json.load(f)
 
     # map lang release codes to labels
@@ -84,7 +84,7 @@ def load_data():
 
 @st.cache_data
 def load_trends():
-    return pd.read_csv("csv/artist_trends_without_voc.csv")
+    return pd.read_csv("data/processed/artist_trends_without_voc.csv")
 
 df = load_data()
 trends_df = load_trends()
