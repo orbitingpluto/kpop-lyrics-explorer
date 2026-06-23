@@ -6,7 +6,7 @@ i scraped 13,000+ songs from [color coded lyrics](https://colorcodedlyrics.com),
 
 ## live demo
 
-👉 [kpop lyrics explorer](https://kpop-lyrics-explorer.streamlit.app/)
+[kpop lyrics explorer](https://kpop-lyrics-explorer.streamlit.app/)
 
 ## running locally
 
