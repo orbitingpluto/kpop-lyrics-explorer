@@ -45,8 +45,7 @@ def padded_range(*series_list, pad_frac=0.08, floor=None, ceil=None):
 
 def mobile_layout(**extra):
     """
-    Returns Plotly layout kwargs tuned for narrow mobile screens, or an
-    empty dict on desktop (so update_layout(**mobile_layout()) is a no-op).
+    Returns Plotly layout kwargs tuned for narrow mobile screens.
     """
     if not st.session_state.get("is_mobile", False):
         return extra  # desktop: only pass through explicit overrides like height

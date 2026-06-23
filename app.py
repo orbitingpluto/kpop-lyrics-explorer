@@ -1133,48 +1133,20 @@ with st.container(border=True):
         labels={"color": "% english"},
         height=height
     )
-    if st.session_state.get("is_mobile"):
-        fig_heat.update_layout(
-            yaxis={"tickfont": {"size": 9}, "automargin": True},
-            xaxis={"tickfont": {"size": 10}, "side": "bottom"},
-            margin=dict(l=4, r=8, t=24, b=32),
-            coloraxis_colorbar=dict(
-                thickness=10, len=0.6,
-                tickfont=dict(size=9),
-                title=dict(text="% eng", font=dict(size=10)),
-            ),
-        )
-        fig_heat.update_traces(
-            hovertemplate="<b>%{y}</b><br>year: %{x}<br>% english: %{z:.0%}<extra></extra>"
-        )
-        HEAT_WIDTH = 900
-        fig_heat.update_layout(width=HEAT_WIDTH)
-        heat_json = fig_heat.to_json()
-        scroll_html = f"""
-        <div style="overflow-x: auto; -webkit-overflow-scrolling: touch; width: 100%;">
-          <div id="heatmap-div" style="width: {HEAT_WIDTH}px;"></div>
-        </div>
-        <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-        <script>
-          Plotly.newPlot('heatmap-div', {heat_json});
-        </script>
-        """
-        components.html(scroll_html, height=height + 60, scrolling=False)
-    else:
-        fig_heat.update_layout(
-            yaxis={"tickfont": {"size": 10}, "automargin": True},
-            xaxis={"tickfont": {"size": 11}, "side": "bottom"},
-            margin=dict(l=4, r=16, t=24, b=32),
-            coloraxis_colorbar=dict(
-                thickness=12, len=0.7,
-                tickfont=dict(size=10),
-                title=dict(text="% english", font=dict(size=11)),
-            ),
-        )
-        fig_heat.update_traces(
-            hovertemplate="<b>%{y}</b><br>year: %{x}<br>% english: %{z:.0%}<extra></extra>"
-        )
-        st.plotly_chart(fig_heat, use_container_width=True, key="heatmap")
+    fig_heat.update_layout(
+        yaxis={"tickfont": {"size": 10}, "automargin": True},
+        xaxis={"tickfont": {"size": 11}, "side": "bottom"},
+        margin=dict(l=4, r=16, t=24, b=32),
+        coloraxis_colorbar=dict(
+            thickness=12, len=0.7,
+            tickfont=dict(size=10),
+            title=dict(text="% english", font=dict(size=11)),
+        ),
+    )
+    fig_heat.update_traces(
+        hovertemplate="<b>%{y}</b><br>year: %{x}<br>% english: %{z:.0%}<extra></extra>"
+    )
+    st.plotly_chart(fig_heat, use_container_width=True, key="heatmap")
 st.divider()
 st.markdown('<a id="nav-info"></a>', unsafe_allow_html=True)
 st.markdown('<a name="methodology"></a>', unsafe_allow_html=True)
