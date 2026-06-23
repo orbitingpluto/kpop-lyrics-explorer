@@ -378,17 +378,19 @@ html, body, section.main { scroll-behavior: smooth; }
     }
     /* reduce radio button label font on mobile */
     .stRadio label { font-size: 0.82rem !important; }
+    /* extra clearance so anchor jumps land below the fixed top nav */
+    [id^="nav-"] { scroll-margin-top: 96px; }
 }
 
 .kpop-mnav {
     display: none;
     position: fixed;
-    bottom: 0; left: 0; right: 0;
+    top: 0; left: 0; right: 0;
     background: rgba(9, 4, 20, 0.96);
-    border-top: 1px solid #3a2456;
+    border-bottom: 1px solid #3a2456;
     z-index: 999999;
     padding: 6px 0;
-    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    padding-top: max(6px, env(safe-area-inset-top));
     justify-content: space-around;
     align-items: center;
     backdrop-filter: blur(14px);
@@ -396,7 +398,7 @@ html, body, section.main { scroll-behavior: smooth; }
 }
 @media (max-width: 768px) {
     .kpop-mnav { display: flex !important; }
-    .block-container { padding-bottom: 88px !important; }
+    .block-container { padding-top: 88px !important; }
 }
 .kpop-mnav a {
     display: flex; flex-direction: column; align-items: center;
