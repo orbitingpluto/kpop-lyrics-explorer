@@ -7,7 +7,7 @@ i scraped 13,000+ songs from [color coded lyrics](https://colorcodedlyrics.com),
 ## running locally
 
 ```bash
-git clone https://github.com/yourname/kpop-lyrics-explorer
+git clone https://github.com/orbitingpluto/kpop-lyrics-explorer
 cd kpop-lyrics-explorer
 pip install -r requirements.txt
 streamlit run app.py
