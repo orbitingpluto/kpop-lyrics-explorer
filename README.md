@@ -4,6 +4,10 @@ how much english is actually in kpop lyrics, and has it changed over time?
 
 i scraped 13,000+ songs from [color coded lyrics](https://colorcodedlyrics.com), tagged every word by language, and built this dashboard to find out.
 
+## live demo
+
+[kpop lyrics explorer](https://kpop-lyrics-explorer.streamlit.app/)
+
 ## running locally
 
 ```bash
