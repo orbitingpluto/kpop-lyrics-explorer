@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import json
+import re
 from scipy.stats import linregress
 from src.utils import LANG_LABELS, LANG_COLORS, BIG4_AGENCIES, padded_range, mobile_layout
 
@@ -14,25 +15,11 @@ st.set_page_config(
     page_icon="✦",
     menu_items={"About": "13,000+ kpop songs tagged by language, 2010–2025. built by a fan."}
 )
-
 # ── mobile detection ──────────────────────────────────────────────────────
-# JS reads window.innerWidth and writes ?mobile=1/0 into the URL if not set;
-# the resulting rerun lets Python see the param via st.query_params.
-components.html("""
-<script>
-(function() {
-    const params = new URLSearchParams(window.location.search);
-    if (!params.has('mobile')) {
-        params.set('mobile', window.innerWidth <= 768 ? '1' : '0');
-        const newUrl = window.location.pathname + '?' + params.toString() + window.location.hash;
-        window.location.replace(newUrl);
-    }
-})();
-</script>
-""", height=0)
-
-_mobile_param = st.query_params.get("mobile", "0")
-st.session_state["is_mobile"] = (_mobile_param == "1")
+_ua = st.context.headers.get("User-Agent", "")
+st.session_state["is_mobile"] = bool(
+    re.search(r"Mobi|Android|iPhone|iPad|iPod", _ua, re.IGNORECASE)
+)
 
 def _is_big4(agency):
     """
@@ -1128,10 +1115,9 @@ with st.container(border=True):
         order = trends_df.set_index("artist")["slope_per_year"].sort_values(ascending=False).index
         pivot = pivot.reindex([a for a in order if a in pivot.index])
 
-    import re as _re
     def _short_label(name):
         """Strip ' (한국어)' parenthetical to keep only the romanized name."""
-        return _re.sub(r"\s*\(.*\)$", "", name).strip()
+        return re.sub(r"\s*\(.*\)$", "", name).strip()
 
     pivot_display = pivot.copy()
     pivot_display.index = [_short_label(a) for a in pivot_display.index]
