@@ -30,6 +30,47 @@ def _is_big4(agency):
     a = str(agency).upper()
     return any(a.startswith(k) for k in BIG4_AGENCIES)
 
+def slope_change(series):
+    """
+    Fit a linear regression (OLS) of a value against time (in index position,
+    e.g. years) and return the *fitted* total change across the series'
+    span — i.e. slope * (n_points - 1) — instead of the naive
+    last-value-minus-first-value difference.
+
+    This is far less sensitive to noisy endpoints: a single unusually high
+    or low first/last year won't dominate the "change" the way it would with
+    a raw endpoint subtraction, because the slope is fit using every point
+    in between.
+
+    :param series: pandas Series indexed by year (or any ordered sequence),
+        with NaNs allowed (they're dropped before fitting)
+    :returns: float total change over the series' span fit via OLS slope,
+        or np.nan if fewer than 2 valid points are available
+    """
+    s = series.dropna()
+    if len(s) < 2:
+        return np.nan
+    x = np.arange(len(s))
+    slope, intercept, _, _, _ = linregress(x, s.values)
+    return slope * (len(s) - 1)
+
+def slope_per_step(series):
+    """
+    Same fit as slope_change, but returns the raw per-step slope rather than
+    the total change across the span. Useful when comparing series of
+    different lengths (e.g. artists with different numbers of active years).
+
+    :param series: pandas Series indexed by year (or any ordered sequence)
+    :returns: float slope (change per index step), or np.nan if fewer than
+        2 valid points are available
+    """
+    s = series.dropna()
+    if len(s) < 2:
+        return np.nan
+    x = np.arange(len(s))
+    slope, intercept, _, _, _ = linregress(x, s.values)
+    return slope
+
 # ── data loading ──────────────────────────────────────────────────────────
 
 @st.cache_data
@@ -40,7 +81,9 @@ def load_data():
     """
     df = pd.read_csv("data/processed/kpop_lyrics_clean.csv")
     df["year"] = df["date"].str[:4]
-    df = df[(df["year"] >= "2010") & (df["year"] <= "2025")]
+    # only drop pre-2010 data; no upper cap, so new years show up automatically
+    # as the dataset grows instead of needing a code change every year
+    df = df[df["year"] >= "2010"]
 
     with open("data/processed/agency_map.json") as f:
         agency_map = json.load(f)
@@ -100,37 +143,56 @@ def compute_intro_stats(df, trends_df):
     lang_pct = lang_counts.div(totals, axis=0) * 100
 
     # 3. find first year vs last year % in korean and english only songs
+    # (endpoint values, used for the "it went from X to Y" narrative text)
     kor_only_start = lang_pct.loc[first_year, "Korean only"]
     kor_only_recent = lang_pct.loc[last_year, "Korean only"]
     eng_only_start = lang_pct.loc[first_year, "English only"]
     eng_only_recent = lang_pct.loc[last_year, "English only"]
+    # change is the OLS-fitted slope's total movement across the whole
+    # series, not just the recent-year minus first-year endpoints, so one
+    # unusually high/low year at either edge doesn't dominate the number
+    kor_only_change = slope_change(lang_pct["Korean only"])
+    eng_only_change = slope_change(lang_pct["English only"])
 
     # and first and last english % within mixed-language songs
     mixed = df[df["language_release"] == "Korean & English mix"]
     mixed_eng = mixed.groupby("year")[pct_col].mean() * 100
     mixed_start = mixed_eng.loc[first_year]
     mixed_recent = mixed_eng.loc[last_year]
+    mixed_change = slope_change(mixed_eng)
 
-    # 4. find inflection point in graph
+    # 4. find inflection point in graph: fit two separate lines (before/after
+    # a candidate split year) and pick the split that minimizes the combined
+    # fit error across both segments — the standard way to find a "bend" in
+    # a piecewise trend. uses sum of squared residuals (SSE), not standard
+    # error scaled by segment length: that earlier approach was biased
+    # toward picking very early splits, since a 2-3 point first segment
+    # trivially has ~zero standard error regardless of how well the second
+    # segment actually fits, which kept dragging the "best" split toward
+    # the start of the data instead of the actual visual bend in the curve
     overall_vals = overall.values
     overall_years = overall.index.tolist()
     best_year = None
-    best_residual = np.inf
+    best_sse = np.inf
     for i in range(2, len(overall_vals) - 2):
         x1, y1 = np.arange(i), overall_vals[:i]
         x2, y2 = np.arange(len(overall_vals) - i), overall_vals[i:]
-        _, _, _, _, se1 = linregress(x1, y1)
-        _, _, _, _, se2 = linregress(x2, y2)
-        residual = se1 * i + se2 * (len(overall_vals) - i)
-        if residual < best_residual:
-            best_residual = residual
+        slope1, intercept1, _, _, _ = linregress(x1, y1)
+        slope2, intercept2, _, _, _ = linregress(x2, y2)
+        sse = np.sum((y1 - (slope1 * x1 + intercept1)) ** 2) + np.sum((y2 - (slope2 * x2 + intercept2)) ** 2)
+        if sse < best_sse:
+            best_sse = sse
             best_year = overall_years[i]
     inflection_year = best_year
 
     # 5. find artists with most influence in each direction
     t = trends_df.copy()
     t["weighted_slope"] = t["slope_per_year"] * np.log1p(t["n_songs"])
-    median_change = t["total_change"].median() * 100
+    # slope-fitted change, not the raw end_pct-minus-start_pct total_change
+    # column — a single stray song at either edge of an artist's career
+    # can otherwise dominate the number (see the movers section below)
+    t["fitted_change"] = t["slope_per_year"] * (t["n_years_active"] - 1)
+    median_change = t["fitted_change"].median() * 100
     top_mover    = t[t["artist"] == "TREASURE (트레저)"].iloc[0] if "TREASURE (트레저)" in t["artist"].values else t.sort_values("weighted_slope", ascending=False).iloc[0]
     bottom_mover = t[t["artist"] == "BIGBANG (빅뱅)"].iloc[0]  if "BIGBANG (빅뱅)"  in t["artist"].values else t.sort_values("weighted_slope").iloc[0]
 
@@ -143,15 +205,18 @@ def compute_intro_stats(df, trends_df):
         "overall_series": overall,
         "kor_only_start": round(kor_only_start, 1),
         "kor_only_recent": round(kor_only_recent, 1),
+        "kor_only_change": round(kor_only_change, 1),
         "eng_only_start": round(eng_only_start, 1),
         "eng_only_recent": round(eng_only_recent, 1),
+        "eng_only_change": round(eng_only_change, 1),
         "mixed_start": round(mixed_start),
         "mixed_recent": round(mixed_recent),
+        "mixed_change": round(mixed_change),
         "median_change": round(median_change, 1),
         "top_mover_name": top_mover["artist"],
-        "top_mover_change": round(top_mover["total_change"] * 100),
+        "top_mover_change": round(top_mover["fitted_change"] * 100),
         "bottom_mover_name": bottom_mover["artist"],
-        "bottom_mover_change": round(bottom_mover["total_change"] * 100),
+        "bottom_mover_change": round(bottom_mover["fitted_change"] * 100),
     }
 
 stats = compute_intro_stats(df, trends_df)
@@ -305,9 +370,9 @@ def render_intro():
                 </style>
             """, unsafe_allow_html=True)
 
-            mcol1.metric("korean-only releases", f"{stats['kor_only_recent']}%", f"{stats['kor_only_recent'] - stats['kor_only_start']:.1f} pts")
-            mcol2.metric("english-only releases", f"{stats['eng_only_recent']}%", f"+{stats['eng_only_recent'] - stats['eng_only_start']:.1f} pts")
-            mcol3.metric("english within mixed songs", f"{stats['mixed_recent']}%", f"+{stats['mixed_recent'] - stats['mixed_start']} pts")
+            mcol1.metric("korean-only releases", f"{stats['kor_only_recent']}%", f"{stats['kor_only_change']:+.1f} pts")
+            mcol2.metric("english-only releases", f"{stats['eng_only_recent']}%", f"{stats['eng_only_change']:+.1f} pts")
+            mcol3.metric("english within mixed songs", f"{stats['mixed_recent']}%", f"{stats['mixed_change']:+.0f} pts")
 
         elif stage == 3:
             # not the whole industry
@@ -435,8 +500,8 @@ st.markdown('<a id="nav-top"></a>', unsafe_allow_html=True)
 st.title("✦ kpop lyrics explorer ✦")
 
 st.markdown("""
-if you've been in kpop spaces lately, you've heard it: *"why is everything in english now??"*
-but is it actually a trend, or are we just noticing the big 4 groups' english singles and forgetting everything else?
+if you've been in kpop spaces lately, or have listened to kpop lately, you know that a lot of kpop songs seem to have more and more english. you've heard people talk about how they miss when it was *\"Kpop not kPOP\"* if you've been here for a while, you've noticed the change firsthand.
+but is it actually a trend, or are we just hearing the english-heavy songs more? is this an industry-wide change, or does it depend on agency? how do specific groups compare? groups vs. soloists? 3rd gen vs 4th gen?
  
 i scraped 13,000+ songs from [color coded lyrics](https://colorcodedlyrics.com), tagged every word by language, and built this so you can find out for yourself.
             """)
@@ -449,7 +514,10 @@ with st.expander("filters (apply to everything below) ✧"):
 
     f1, f2, f3, f4, f5 = st.columns([2, 2, 2, 2, 2])
     with f1:
-        year_range = st.slider("time period", 2010, 2025, (2010, 2025))
+        _min_yr, _max_yr = int(df["year"].min()), int(df["year"].max())
+        year_range = st.slider("time period", _min_yr, _max_yr, (_min_yr, _max_yr))
+        if _max_yr == pd.Timestamp.now().year:
+            st.caption(f"⚠️ {_max_yr} is still in progress — only a few months of releases so far, so take that year with a grain of salt.")
     with f2:
         selected_agencies = st.multiselect(
             "label", sorted(df["agency"].unique()), default=[],
@@ -501,7 +569,7 @@ eng_only_count = (filtered["language_release"] == "English only").sum()
 eng_only_total = (df["language_release"] == "English only").sum()
 
 active_filters = bool(selected_artists or selected_agencies or selected_gens or lang_filter
-                      or big4_toggle or year_range != (2010, 2025))
+                      or big4_toggle or year_range != (_min_yr, _max_yr))
 
 
 mcol1, mcol2, mcol3 = st.columns(3)
@@ -513,7 +581,7 @@ else:
     mcol2.metric("artists", f"{filtered_artists:,}")
 mcol3.metric("avg english share", f"{round(filtered[pct_col].mean()*100)}%")
 
-st.caption("[how this data was collected + the fine print](#methodology) — full breakdown at the bottom")
+st.caption("[how this data was collected + the fine print](#methodology), full breakdown at the bottom")
 
 st.divider()
 
@@ -548,6 +616,8 @@ with chart_l:
             f"mixed-language songs averaged **{_mix_start}% english** words early on and now it's "
             f"**{_mix_end}%**. and all of this happened at (about) the same time."
         )
+        if int(_last_yr) == pd.Timestamp.now().year:
+            st.caption(f"(heads up: {_last_yr} only has a few months of releases so far, so its numbers will keep moving.)")
 
         # get dataframe for year and language type specifically to plot
         lang_counts = filtered.groupby(["year", "language_release"]).size().unstack(fill_value=0).reset_index()
@@ -668,7 +738,7 @@ with chart_r:
             _agency_change = (
                 filtered.groupby(["agency", "year"])[pct_col].mean()
                 .unstack()
-                .apply(lambda r: r.dropna().iloc[-1] - r.dropna().iloc[0] if r.dropna().shape[0] >= 2 else np.nan, axis=1)
+                .apply(slope_change, axis=1)
                 .sort_values(ascending=False)
             )
             _most_eng_agency   = _agency_latest.index[0]
@@ -678,8 +748,9 @@ with chart_r:
             st.markdown(
                 f"this varies a lot with agency. **{_most_eng_agency}** is currently "
                 f"the most english-heavy label in this view, **{_least_eng_agency}** is the most "
-                f"korean. the label that changed the most over time is **{_biggest_riser}**, "
-                f"changing by roughly **{_biggest_riser_chg:+.0f} percentage points**."
+                f"korean. the label with the steepest trend over time is **{_biggest_riser}**, "
+                f"moving by roughly **{_biggest_riser_chg:+.0f} percentage points** based on its "
+                f"year-over-year trend line."
             )
             trend_fig = px.line(yearly_cmp, x="year", y=pct_col, color="agency", markers=True,
                                 custom_data=["n"],
@@ -696,7 +767,7 @@ with chart_r:
             _gen_change = (
                 filtered.groupby(["generation", "year"])[pct_col].mean()
                 .unstack()
-                .apply(lambda r: r.dropna().iloc[-1] - r.dropna().iloc[0] if r.dropna().shape[0] >= 2 else np.nan, axis=1)
+                .apply(slope_change, axis=1)
                 .sort_values(ascending=False)
             )
             _gen_latest = (
@@ -736,7 +807,7 @@ with chart_r:
                 filtered[filtered["group_type"] != "mixed group"]
                 .groupby(["group_type", "year"])[pct_col].mean()
                 .unstack()
-                .apply(lambda r: r.dropna().iloc[-1] - r.dropna().iloc[0] if r.dropna().shape[0] >= 2 else np.nan, axis=1)
+                .apply(slope_change, axis=1)
                 .sort_values(ascending=False)
             )
             def _phrase_type(label):
@@ -848,7 +919,11 @@ with lookup_col:
             _a_end_yr    = _a_yearly.index[-1]
             _a_start_val = round(_a_yearly.iloc[0])
             _a_end_val   = round(_a_yearly.iloc[-1])
-            _a_change    = _a_end_val - _a_start_val
+            # slope-fitted change across all of the artist's active years,
+            # rather than just the most-recent-year-minus-first-year
+            # endpoints — keeps a single unusually high/low year from
+            # making an otherwise-flat artist look like a big mover
+            _a_change    = round(slope_change(_a_yearly))
             _a_peak_yr   = _a_yearly.idxmax()
             _a_peak_val  = round(_a_yearly.max())
             _direction   = "more english" if _a_change > 0 else "more korean"
@@ -858,9 +933,9 @@ with lookup_col:
             if _mag < 5:
                 _trend_desc = f"their english share has been consistent: **{_a_start_val}%** in {_a_start_yr}, **{_a_end_val}%** in {_a_end_yr}."
             elif _a_change > 0:
-                _trend_desc = f"they've drifted noticeably toward english: **{_a_start_val}%** in {_a_start_yr} to **{_a_end_val}%** in {_a_end_yr} (+{_mag} pp)."
+                _trend_desc = f"they've drifted noticeably toward english: **{_a_start_val}%** in {_a_start_yr} to **{_a_end_val}%** in {_a_end_yr}, a trend of roughly **+{_mag} pp** over that span."
             else:
-                _trend_desc = f"they actually leaned MORE korean over time — **{_a_start_val}%** english in {_a_start_yr} down to **{_a_end_val}%** in {_a_end_yr} ({_a_change} pp)."
+                _trend_desc = f"they actually leaned MORE korean over time — **{_a_start_val}%** english in {_a_start_yr} down to **{_a_end_val}%** in {_a_end_yr}, a trend of roughly **{_a_change} pp** over that span."
             _peak_note = f" the year they had the most english in their songs was **{_a_peak_yr}** ({_a_peak_val}%)." if _a_peak_yr != _a_end_yr else ""
             _eng_only_note = f" **{_eng_only_pct}% of their songs** are fully english releases." if _eng_only_pct > 5 else ""
             st.markdown(f"{_trend_desc}{_peak_note}{_eng_only_note}")
@@ -997,73 +1072,138 @@ with movers_col:
         st.subheader("who's changed the most ✧")
         trends_filtered = trends_df[trends_df["artist"].isin(filtered["artist"].unique())].copy()
 
+        # require artists to still be releasing music: a few songs early on
+        # followed by years of silence (e.g. IOI: active 2016-2017, one
+        # farewell song in 2018) can look like a huge "shift" even though
+        # it's really just one stale data point dragging the trend line —
+        # so only consider artists with more than 5 songs in the last few
+        # years of data actually present in this view. uses a 3-calendar-year
+        # window (not 2) since the most recent year is usually still in
+        # progress and only has a few months of releases in it
+        _recent_cutoff = str(int(filtered["year"].max()) - 2)
+        _recent_song_counts = (
+            filtered[filtered["year"] >= _recent_cutoff]
+            .groupby("artist")["url"].count()
+        )
+        _active_artists = _recent_song_counts[_recent_song_counts > 5].index
+        trends_filtered = trends_filtered[trends_filtered["artist"].isin(_active_artists)].copy()
+
+        # "total_change" in the underlying data is just end-year-avg minus
+        # start-year-avg — and an artist's first or last *year* can be a
+        # single song (or a single same-day album drop), so that endpoint
+        # can swing 0%->100% on its own. use the fitted regression slope's
+        # total movement across the whole career instead, since it's pulled
+        # from every year in between, not just the two edges
+        trends_filtered["change_pct_pts"] = (
+            trends_filtered["slope_per_year"] * (trends_filtered["n_years_active"] - 1) * 100
+        )
         trends_filtered["weighted_slope"] = (
             trends_filtered["slope_per_year"] * np.log1p(trends_filtered["n_songs"])
         )
-        trends_filtered["change_pct_pts"] = trends_filtered["total_change"] * 100
 
-        _median_chg  = round(trends_filtered["total_change"].median() * 100, 1)
-        _unchanged_n = (trends_filtered["total_change"].abs() < 0.05).sum()
+        # only trust trends that are actually consistent year-to-year, not
+        # just noisy bouncing that happens to average out to a slope. kept
+        # in plain terms for the chart/captions: "a clear, consistent pattern"
+        _is_solid_trend = (trends_filtered["p_value"] < 0.1) & (trends_filtered["r_squared"] > 0.2)
+        trends_solid = trends_filtered[_is_solid_trend].copy()
 
-        top_movers = trends_filtered.sort_values("weighted_slope", ascending=False).head(10)
-        top_korean = trends_filtered.sort_values("weighted_slope").head(10)
+        if trends_filtered.empty:
+            st.info(
+                "no artists in this view have more than 5 songs in the last few "
+                "years — try widening your filters."
+            )
+        elif trends_solid.empty:
+            st.info(
+                "no artist in this view has a clear, consistent pattern over time right now — "
+                "everyone's year-to-year english % is bouncing around too much to call it a real trend. "
+                "try widening your filters to see more artists."
+            )
+        else:
+            _median_chg  = round(trends_solid["change_pct_pts"].median(), 1)
+            _unchanged_n = (trends_solid["change_pct_pts"].abs() < 5).sum()
 
-        _top1 = top_movers.iloc[0]
-        _bot1 = top_korean.iloc[0]
-        _top_name, _top_chg = _top1["artist"], round(_top1["change_pct_pts"])
-        _bot_name, _bot_chg = _bot1["artist"], round(_bot1["change_pct_pts"])
+            top_movers = trends_solid.sort_values("weighted_slope", ascending=False).head(10)
+            top_korean = trends_solid[trends_solid["slope_per_year"] < 0].sort_values("weighted_slope").head(10)
 
-        st.markdown(
-            f"the median artist shifted by just **{_median_chg} percentage points** over their "
-            f"whole career. about "
-            f"**{_unchanged_n} artists** changed by less than 5 points total. so the trend is real, "
-            f"but it's concentrated in a handful of artists who made an actual change. **{_top_name}** "
-            f"leads the english shift (**+{_top_chg} pp**), **{_bot_name}** went furthest the other "
-            f"way (**{_bot_chg} pp**). disclaimer: a big number here doesn't always mean a deliberate "
-            f"choice, some artists just have more recent songs that happen to be more english, "
-            f"which inflates the total change a bit."
-        )
+            _top1 = top_movers.iloc[0]
+            _top_name, _top_chg = _top1["artist"], round(_top1["change_pct_pts"])
 
-        combined = pd.concat([top_movers, top_korean]).copy()
-        combined["direction"] = combined["weighted_slope"].apply(
-            lambda s: "toward english" if s > 0 else "toward korean"
-        )
-        combined = combined.sort_values("weighted_slope", ascending=True)
+            if top_korean.empty:
+                # the actual headline finding: among artists with a real,
+                # consistent trend, literally none of them are trending
+                # toward korean right now
+                st.markdown(
+                    f"here's the big one: among artists with a clear, consistent pattern over time "
+                    f"(not just noisy bouncing), **not a single one in this view is trending toward korean** "
+                    f"right now. every artist whose english % moves in a real, sustained direction is moving "
+                    f"toward **more english** — **{_top_name}** leads the pack (**+{_top_chg} pp** over their "
+                    f"career, based on their trend line). artists who *have* drifted toward korean over time "
+                    f"tend to be ones who've gone quiet or disbanded — once you only look at who's still "
+                    f"actively releasing music, the korean-leaning trend disappears."
+                )
+            else:
+                _bot1 = top_korean.iloc[0]
+                _bot_name, _bot_chg = _bot1["artist"], round(_bot1["change_pct_pts"])
+                st.markdown(
+                    f"among artists with a clear, consistent pattern over time (not just noisy bouncing), "
+                    f"the median shift is **{_median_chg} percentage points** over their whole career, and "
+                    f"**{_unchanged_n} of them** changed by less than 5 points total. **{_top_name}** leads the "
+                    f"english shift (**+{_top_chg} pp**, based on their trend line), **{_bot_name}** went furthest "
+                    f"the other way (**{_bot_chg} pp**). disclaimer: a big number here doesn't always mean a "
+                    f"deliberate choice."
+                )
 
-        fig_combined = px.bar(
-            combined, x="weighted_slope", y="artist", orientation="h",
-            color="direction",
-            color_discrete_map={"toward english": "#8ecae6", "toward korean": "#ff8fab"},
-            labels={"weighted_slope": "weighted shift score", "direction": ""},
-            text=combined["change_pct_pts"].apply(lambda v: f"{v:+.0f} pp"),
-        )
-        fig_combined.update_layout(
-            height=640,
-            margin=dict(l=4, r=56, t=48, b=48),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
-            font=dict(size=10),
-        )
-        fig_combined.update_yaxes(
-            automargin=True,
-            categoryorder="array",
-            categoryarray=combined["artist"].tolist(),
-            tickfont=dict(size=9),
-        )
-        fig_combined.update_xaxes(tickfont=dict(size=10))
-        fig_combined.update_traces(
-            textposition="outside",
-            textfont=dict(size=9),
-            hovertemplate="<b>%{y}</b><br>%{text} raw change<br>weighted score: %{x:.2f}<extra></extra>"
-        )
-        fig_combined.add_vline(x=0, line_width=1, line_color="#555")
-        fig_combined.update_xaxes(range=padded_range(combined["weighted_slope"], pad_frac=0.22))
-        st.plotly_chart(fig_combined, use_container_width=True)
+            combined = pd.concat([top_movers, top_korean]).copy()
+            combined["direction"] = combined["weighted_slope"].apply(
+                lambda s: "toward english" if s > 0 else "toward korean"
+            )
+            combined = combined.sort_values("weighted_slope", ascending=True)
 
-        st.caption(
-            "ranked by a weighted shift score (raw change × how much data backs it up), "
-            "so an artist with a few songs with a big swing doesn't outrank one with a lot of songs and a consistent change. "
-            "pp labels show the actual raw percentage-point change for context."
-        )
+            fig_combined = px.bar(
+                combined, x="weighted_slope", y="artist", orientation="h",
+                color="direction",
+                color_discrete_map={"toward english": "#8ecae6", "toward korean": "#ff8fab"},
+                labels={"weighted_slope": "weighted shift score", "direction": ""},
+                text=combined["change_pct_pts"].apply(lambda v: f"{v:+.0f} pp"),
+            )
+            fig_combined.update_layout(
+                height=640,
+                margin=dict(l=4, r=56, t=48, b=48),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
+                font=dict(size=10),
+            )
+            fig_combined.update_yaxes(
+                automargin=True,
+                categoryorder="array",
+                categoryarray=combined["artist"].tolist(),
+                tickfont=dict(size=9),
+            )
+            fig_combined.update_xaxes(tickfont=dict(size=10))
+            fig_combined.update_traces(
+                textposition="outside",
+                textfont=dict(size=9),
+                hovertemplate="<b>%{y}</b><br>%{text} trend-line change<br>weighted score: %{x:.2f}<extra></extra>"
+            )
+            fig_combined.add_vline(x=0, line_width=1, line_color="#555")
+            fig_combined.update_xaxes(range=padded_range(combined["weighted_slope"], pad_frac=0.22))
+            st.plotly_chart(fig_combined, use_container_width=True)
+
+            if top_korean.empty:
+                st.caption(
+                    "👀 every bar here points the same way — that's not a mistake, "
+                    "it's the finding. no artist with a real trend is currently moving toward korean."
+                )
+
+            st.caption(
+                "ranked by a weighted shift score (trend strength × how much data backs it up), "
+                "so an artist with a few songs and a big swing doesn't outrank one with a lot of songs and a "
+                "consistent change. pp labels show the change implied by each artist's trend line, not just "
+                "their first vs. most recent song — a single viral cover or one-off english single won't throw "
+                "off the whole picture. "
+                "only includes artists with more than 5 songs in the last few years (so groups that have gone "
+                "quiet don't show up as 'movers') AND a clear, consistent pattern over time (so normal year-to-"
+                "year noise doesn't get mistaken for a real trend)."
+            )
 
 st.divider()
 
@@ -1166,7 +1306,7 @@ with st.expander("how this works + where the data's from"):
 
     **stuff to keep in mind, no data is perfect:**
     - the dates for each song are taken from the date the CCL lyrics were published, so some may be off. this will be noticeable when analyzing individual groups. however, these inconsistencies are small enough and the dataset so large, they do not affect the overall industry trend data.
-    - for ARMYs: i unfortunately do not have data from SWIM because it is not on CCL.
+    - for ARMYs: i unfortunately do not have data from ARIRANG because it is not on CCL.
     - scraping isn't flawless, so some songs might be missing, duplicated, or messed up if the source structure was neglected in the site structure detection of the scraping. ccl is pretty inconsistent, but i tried.
     - ccl's coverage isn't across every artist/year, older releases are underrepresented.
     - loanwords written in korean script (e.g. 버스 for "bus") get counted as korean.
