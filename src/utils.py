@@ -1,6 +1,57 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
+from scipy.stats import linregress
+
+# thresholds used everywhere we decide whether a trend is "solid" (real,
+# consistent) vs just noisy bouncing that happens to average out to a slope.
+# pulled out as shared constants so the intro, movers tab, heatmap sort, and
+# artist lookup can't quietly drift out of sync with each other again.
+SOLID_TREND_P_MAX = 0.1
+SOLID_TREND_R2_MIN = 0.2
+
+
+def fit_trend(series):
+    """
+    Fit an OLS regression of a value against time (index position) and
+    return everything needed to narrate it *consistently*.
+
+    Returns a dict with:
+      - fitted_start, fitted_end: the regression LINE's values at the first
+        and last point (not the raw/noisy actual values there). Use these
+        two numbers together in a sentence and their direction can never
+        contradict the reported change or trend direction, since they come
+        from the exact same fit.
+      - change: fitted_end - fitted_start (same sign as slope, by construction)
+      - r_squared, p_value: how much to trust the fit
+      - is_solid: whether this trend clears the shared "real trend" bar
+      - n: number of valid (non-NaN) points used
+
+    Returns None if fewer than 2 valid points are available.
+
+    :param series: pandas Series indexed by year (or any ordered sequence),
+        with NaNs allowed (they're dropped before fitting)
+    """
+    s = series.dropna()
+    if len(s) < 2:
+        return None
+    x = np.arange(len(s))
+    slope, intercept, r, p, _ = linregress(x, s.values)
+    fitted_start = intercept
+    fitted_end = intercept + slope * (len(s) - 1)
+    r_squared = r ** 2
+    return {
+        "fitted_start": fitted_start,
+        "fitted_end": fitted_end,
+        "change": fitted_end - fitted_start,
+        "slope": slope,
+        "r_squared": r_squared,
+        "p_value": p,
+        "is_solid": (p < SOLID_TREND_P_MAX) and (r_squared > SOLID_TREND_R2_MIN),
+        "n": len(s),
+    }
+
+
 # map language codes in csv to labels
 LANG_LABELS = {
     "kor": "Korean only",
@@ -21,26 +72,6 @@ LANG_COLORS = {
 
 # big 4 agencies used by the big4-only filter toggle below.
 BIG4_AGENCIES = ["SM", "JYP", "YG", "HYBE"]
-
-
-def padded_range(*series_list, pad_frac=0.08, floor=None, ceil=None):
-    """
-    Tight axis range around actual data instead of a fixed full-scale range.
-    :param series_list: one or more Series/arrays
-    :param pad_frac: how much padding to apply
-    :param floor: minimum value
-    :param ceil: maximum value
-    """
-    vals = np.concatenate([pd.Series(s).dropna().values for s in series_list])
-    lo, hi = vals.min(), vals.max()
-    span = max(hi - lo, 1e-9)
-    pad = span * pad_frac
-    lo, hi = lo - pad, hi + pad
-    if floor is not None:
-        lo = max(lo, floor)
-    if ceil is not None:
-        hi = min(hi, ceil)
-    return [lo, hi]
 
 
 def mobile_layout(**extra):
