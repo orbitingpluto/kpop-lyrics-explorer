@@ -37,7 +37,7 @@ def slope_change(series):
     """
     Fit a linear regression (OLS) of a value against time (in index position,
     e.g. years) and return the *fitted* total change across the series'
-    span — i.e. slope * (n_points - 1) — instead of the naive
+    span i.e. slope * (n_points - 1) instead of the naive
     last-value-minus-first-value difference.
 
     This is far less sensitive to noisy endpoints: a single unusually high
@@ -85,7 +85,7 @@ def load_data():
     df = pd.read_csv("data/processed/kpop_lyrics_clean.csv")
     df["year"] = df["date"].str[:4]
     df["date"] = pd.to_datetime(df["date"])
-    # drop pre-2010 data. upper cap at 2025 is intentional (not a leftover) —
+    # drop pre-2010 data. upper cap at 2025 is intentional (not a leftover)
     # 2026 data is still too sparse this early in the year to be reliable.
     # bump this cap manually once there's enough 2026 data to trust.
     df = df[df["year"] >= "2010"]
@@ -207,7 +207,7 @@ def compute_intro_stats(df, trends_df):
     t_solid = t[_is_intro_solid].copy()
 
     # flag whether we had to fall back to the full unfiltered pool (rather
-    # than crashing), since that pool includes noisy/insignificant trends —
+    # than crashing), since that pool includes noisy/insignificant trends
     # the narrative text needs to caveat this so it doesn't narrate a shaky
     # trend with the same confidence as a real one
     used_solid_fallback = t_solid.empty
@@ -217,7 +217,7 @@ def compute_intro_stats(df, trends_df):
     top_mover = t_solid.sort_values("weighted_slope", ascending=False).iloc[0]
 
     # only treat this as a genuine "toward korean" mover if it actually has a
-    # negative slope — otherwise "bottom_mover" is just the weakest
+    # negative slope otherwise "bottom_mover" is just the weakest
     # toward-english mover, and shouldn't be narrated as "the other way"
     _toward_korean = t_solid[t_solid["weighted_slope"] < 0]
     if not _toward_korean.empty:
@@ -229,6 +229,17 @@ def compute_intro_stats(df, trends_df):
         # doesn't misrepresent its direction
         bottom_mover = t_solid.sort_values("weighted_slope", ascending=True).iloc[0]
         has_korean_mover = False
+
+    # top movers for the stage-3 bar chart — mirrors the homepage's movers
+    # chart: x-axis is the weighted shift score (trend strength × how much
+    # data backs it up), not the raw pp change, so it's ranked consistently
+    # with the homepage view
+    movers_df = t_solid.sort_values("weighted_slope", ascending=False).head(10).copy()
+    movers_df["change_pct_pts"] = movers_df["fitted_change"] * 100
+    movers_df["direction"] = movers_df["weighted_slope"].apply(
+        lambda s: "toward english" if s > 0 else "toward korean"
+    )
+    movers_df = movers_df.sort_values("weighted_slope", ascending=True)
 
     return {
         "first_year": first_year,
@@ -253,6 +264,7 @@ def compute_intro_stats(df, trends_df):
         "bottom_mover_change": round(bottom_mover["fitted_change"] * 100),
         "has_korean_mover": has_korean_mover,
         "used_solid_fallback": used_solid_fallback,
+        "movers_df": movers_df
     }
 
 stats = compute_intro_stats(df, trends_df)
@@ -348,42 +360,27 @@ def render_intro():
     
     with st.container(border=True):
         if stage == 0:
-            # intro
-            st.subheader("is there really so much english in kpop now compared to old kpop?")
+            st.subheader(f"kpop went from {stats['start_overall']}% english to {stats['end_overall']}% english since {stats['first_year']}")
             st.markdown(
-                """"""
-                "if you've been on kpop twt or tiktok for more than five minutes you've probably seen the discourse: "
-                " *\"why is there so much english now??\"*, " \
-                " *\"there's like no korean in kpop songs anymore\"*, " \
-                " *\"i miss when kpop was actually in korean\"* " \
-                f"so, i pulled up {len(df):,} songs from {df['artist'].nunique()} artists "
-                f"released between {stats['first_year']} and {stats['last_year']} and actually checked to figure out what is actually happening in the grand scheme of things. is it mainly YG groups? is it mainly boy groups? how do specific artists/generations compare? is it really as different as we think, or are we just nostalgic for old kpop? ", unsafe_allow_html=True
+                f"if you've been on kpop spaces online you've probably seen the discourse: "
+                f"*\"why is there so much english now??\"*, *\"i miss when kpop was actually in korean\"*. "
+                f"so i pulled up {len(df):,} songs from {df['artist'].nunique()} artists released between "
+                f"{stats['first_year']} and {stats['last_year']} and actually measured it word by word."
             )
             render_sparkline(stats["overall_series"])
             st.caption("avg % english words per song, industry wide, by year. yes i counted every word.")
 
         elif stage == 1:
-            # inflection year
-            st.subheader(f"{stats['inflection_year']} is the year that started it all")
+            # three separate shifts, not one vague trend
+            st.subheader("it's not just 'more english', it's three things happening at once")
             st.markdown(
-                f"through most of the 2010s, the english % was mostly stable"
-                f". then it picked a direction and hasn't stopped growing since. it went from **{stats['start_overall']}%** in {stats['first_year']} "
-                f"to **{stats['end_overall']}%** by {stats['last_year']}, but it really started "
-                f"around **{stats['inflection_year']}**."
-            )
-            render_sparkline(stats["overall_series"], highlight_year=stats["inflection_year"])
-            st.caption(f"same chart with a line marking {stats['inflection_year']}")
-
-        elif stage == 2:
-            # three way comparsion
-            st.subheader("there's a lot going on")
-            st.markdown(
-                f"fully korean releases got rarer "
+                f"it's easy to picture this as one vague trend. after looking at the data, it's clear that this is actually three separate shifts: "
+                f"fully korean releases are disappearing "
                 f"(**{stats['kor_only_start']}%** of releases in {stats['first_year']} → "
                 f"**{stats['kor_only_recent']}%** in {stats['last_year']}), "
-                f"fully english releases got more common "
+                f"fully english releases went from basically nonexistent to common "
                 f"(**{stats['eng_only_start']}%** → **{stats['eng_only_recent']}%**), "
-                f"AND the bilingual songs that stayed bilingual are leaning more english too "
+                f"and even the bilingual songs that stayed bilingual are leaning more english "
                 f"(**{stats['mixed_start']}%** → **{stats['mixed_recent']}%** english content "
                 f"within the mixed-language ones)."
             )
@@ -407,8 +404,19 @@ def render_intro():
             mcol2.metric("english-only releases", f"{stats['eng_only_recent']}%", f"{stats['eng_only_change']:+.1f} pts")
             mcol3.metric("english within mixed songs", f"{stats['mixed_recent']}%", f"{stats['mixed_change']:+.0f} pts")
 
+        elif stage == 2:
+            st.subheader(f"everything changed in {stats['inflection_year']}")
+            st.markdown(
+                f"through most of the 2010s the english % was mostly stable, then it picked a "
+                f"direction around **{stats['inflection_year']}** and hasn't stopped growing since. "
+                f"but the *median* artist barely moved only "
+                f"**{stats['median_change']} points** across their whole career (which is basically nothing). "
+                f"the shift is coming from a small group of artists who moved a *lot*."
+            )
+            render_sparkline(stats["overall_series"], highlight_year=stats["inflection_year"])
+            st.caption(f"same chart with a line marking {stats['inflection_year']}")
+
         elif stage == 3:
-            # not uniform — same direction, different speeds
             if stats["has_korean_mover"]:
                 st.subheader("it's not the whole industry, it's only some eras + groups")
                 _second_clause = (
@@ -417,35 +425,58 @@ def render_intro():
                 )
                 _closing = "so yes the trend is real but it depends on the group/era/agency. "
             else:
-                # nobody with a real trend is moving toward korean — the honest
-                # claim here is "same direction, different speeds," not
-                # "some groups go one way, some go the other"
-                st.subheader("it's not uniform, it's just uneven — everyone's headed the same way")
+                st.subheader("everyone's headed the same way")
                 _second_clause = (
-                    f"even **{stats['bottom_mover_name']}**, the smallest mover in the bunch, "
-                    f"is still creeping toward english, just by **{stats['bottom_mover_change']} points**. "
+                    f"not a single artist with a statistically solid change is moving towards korean. even **{stats['bottom_mover_name']}**, the group with the smallest real change in either direction, "
+                    f"is still moving toward english, just by **{stats['bottom_mover_change']} points**. "
                 )
                 _closing = (
-                    "so the trend isn't a tug-of-war between groups pulling in opposite "
-                    "directions — it's the same current running through the whole industry, "
-                    "just at very different speeds. "
+                    "so, the trend isn't an overall change towards english amongst groups going in opposite "
+                    "directions, it's the same change happening through the whole industry, "
+                    "just at different speeds. "
                 )
 
             st.markdown(
-                f"the median artist barely moved at all, only **{stats['median_change']} points** "
-                f"of change across their whole career, which is basically nothing. but a few groups shifted a lot: among the artists who changed the most, "
+                f"among artists with a real, consistent trend (not just noise), "
                 f"**{stats['top_mover_name']}** shifted **+{stats['top_mover_change']} points** "
-                f"toward english, {_second_clause}"
+                f"toward english over their career. {_second_clause}"
                 f"{_closing}"
             )
             if stats["used_solid_fallback"]:
                 st.caption(
-                    "⚠️ heads up: no artist currently has a clear, statistically consistent trend, "
-                    "so the two names above are just the biggest raw movers in the full dataset — "
+                    "heads up: no artist currently has a clear, statistically consistent trend, "
+                    "so the two names above are just the biggest raw movers in the full dataset "
                     "including artists whose year-to-year english % is noisy rather than a real, "
                     "sustained pattern. take these two with a bigger grain of salt than usual."
                 )
-            st.markdown("wanna see where ur fav sits in all this? scroll down vvv")
+            movers_fig = px.bar(
+                stats["movers_df"], x="weighted_slope", y="artist", orientation="h",
+                color="direction",
+                color_discrete_map={"toward english": "#8ecae6", "toward korean": "#ff8fab"},
+                labels={"weighted_slope": "weighted shift score", "direction": ""},
+                text=stats["movers_df"]["change_pct_pts"].apply(lambda v: f"{v:+.0f} pp"),
+            )
+            movers_fig.update_layout(**mobile_layout(
+                height=500,
+                margin=dict(l=4, r=56, t=48, b=48),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
+                font=dict(size=10),
+            ))
+            movers_fig.update_yaxes(
+                automargin=True,
+                categoryorder="array",
+                categoryarray=stats["movers_df"]["artist"].tolist(),
+                tickfont=dict(size=9),
+            )
+            movers_fig.update_xaxes(tickfont=dict(size=10))
+            movers_fig.update_traces(
+                textposition="outside",
+                textfont=dict(size=9),
+                hovertemplate="<b>%{y}</b><br>%{text} trend-line change<br>weighted score: %{x:.2f}<extra></extra>",
+            )
+            movers_fig.add_vline(x=0, line_width=1, line_color="#555")
+            st.plotly_chart(movers_fig, use_container_width=True, key="intro_movers_chart")
+            st.caption("ranked by a weighted shift score (trend strength × how much data backs it up).")
     # nav buttons
     nav_l, nav_r = st.columns(2)
     with nav_l:
@@ -459,7 +490,7 @@ def render_intro():
                 st.session_state.intro_stage += 1
                 st.rerun()
         else:
-            if st.button("see how ur fav group compares →", key="intro_finish", type="secondary"):
+            if st.button("tell me more →", key="intro_finish", type="secondary"):
                 st.session_state.intro_done = True
                 st.rerun()
 
@@ -559,8 +590,8 @@ st.markdown('<a id="nav-top"></a>', unsafe_allow_html=True)
 st.title("✦ kpop lyrics explorer ✦")
 
 st.markdown("""
-if you've been in kpop spaces lately, or have listened to kpop lately, you know that a lot of kpop songs seem to have more and more english. you've heard people talk about how they miss when it was *\"Kpop not kPOP\"* if you've been here for a while, you've noticed the change firsthand.
-but is it actually a trend, or are we just hearing the english-heavy songs more? is this an industry-wide change, or does it depend on agency? how do specific groups compare? groups vs. soloists? 3rd gen vs 4th gen?
+if you've been in kpop spaces lately, or have listened to kpop lately, you know that a lot of kpop songs seem to have more and more english. you've heard people talk about how they miss when it was *\"Kpop not kPOP\"* if you've been here for a while, you've experienced the change firsthand.
+but is it actually a trend, or are we just hearing the english-heavy songs more often? is this an industry-wide change, or does it depend on agency? how do specific groups compare? groups vs. soloists? 3rd gen vs 4th gen?
  
 i scraped 13,000+ songs from [color coded lyrics](https://colorcodedlyrics.com), tagged every word by language, and built this so you can find out for yourself.
             """)
@@ -614,7 +645,7 @@ if big4_toggle:
     filtered = filtered[filtered["agency"].apply(_is_big4)]
 
 if filtered.empty:
-    st.warning("no songs match this filter combination — try loosening a filter above.")
+    st.warning("no songs match this filter combination. try loosening a filter above.")
     st.stop()
 
 total_songs = len(df)
@@ -674,7 +705,7 @@ with chart_l:
             f"**{_mix_end}%**. and all of this happened at (about) the same time."
         )
         if int(_last_yr) == pd.Timestamp.now().year:
-            st.caption(f"(heads up: {_last_yr} only has a few months of releases so far, so its numbers will keep moving.)")
+            st.caption(f"({_last_yr} only has a few months of releases so far, so its numbers will keep moving.)")
 
         # get dataframe for year and language type specifically to plot
         lang_counts = filtered.groupby(["year", "language_release"]).size().unstack(fill_value=0).reset_index()
@@ -765,13 +796,13 @@ with chart_r:
             # first year where english share crosses 50%
             _majority_yr = next((yr for yr, v in _pct_s.items() if v > 50), None)
             st.markdown(
-                f"in the early part of this view ({_start_yr}–{_climb_yr or _end_yr}) the "
+                f"in the early part of this graph ({_start_yr}–{_climb_yr or _end_yr}) the "
                 f"average is {_range_str} english. "
-                f"then something happens. since {_climb_yr or _start_yr} the average has climbed, "
+                f"then something changes. since {_climb_yr or _start_yr} the average has climbed, "
                 f"from around **{round(_pct_s.loc[_climb_yr] if _climb_yr and _climb_yr in _pct_s.index else _start_val)}%** "
                 f"to **{_end_val}%** by {_end_yr}."
                 + (f" **{_majority_yr}** is the first year the average "
-                   f"song in this view had *more* english words than korean ones." if _majority_yr else "")
+                   f"song had *more* english words than korean ones." if _majority_yr else "")
             )
             
             trend_fig = px.line(yearly, x="year", y=pct_col, markers=True,
@@ -797,7 +828,7 @@ with chart_r:
                 .unstack()
                 .apply(slope_change, axis=1)
             )
-            # "steepest" means biggest magnitude of change, not most positive —
+            # "steepest" means biggest magnitude of change, not most positive
             # a big move toward korean is just as steep as a big move toward
             # english, so rank by absolute value, then report the real
             # (signed) number for that pick
@@ -832,7 +863,7 @@ with chart_r:
                 .unstack()
                 .apply(slope_change, axis=1)
             )
-            # rank by magnitude of change, not raw signed value — see agency
+            # rank by magnitude of change, not raw signed value see agency
             # branch above for why
             _gen_change_ranked = _gen_change.reindex(
                 _gen_change.abs().sort_values(ascending=False).index
@@ -876,7 +907,7 @@ with chart_r:
                 .unstack()
                 .apply(slope_change, axis=1)
             )
-            # rank by magnitude of change, not raw signed value — see agency
+            # rank by magnitude of change, not raw signed value see agency
             # branch above for why
             _type_change_ranked = _type_change.reindex(
                 _type_change.abs().sort_values(ascending=False).index
@@ -930,7 +961,7 @@ with chart_r:
             st.plotly_chart(trend_fig, use_container_width=True, key="trend_chart_main")
  
             with st.expander("see the full spread, not just the averages"):
-                st.caption("each box = the spread of individual songs that year — middle line is the median, box is the middle 50%, dots are outliers.")
+                st.caption("each box = the spread of individual songs that year. middle line is the median, box is the middle 50%, dots are outliers. this is best viewed fullscreen on a computer")
                 if compare_by == "overall trend":
                     fig_box = px.box(filtered, x="year", y=pct_col,
                                     labels={pct_col: "% english words per song"},
@@ -976,7 +1007,7 @@ with lookup_col:
             index=0, label_visibility="collapsed",
         )
 
-        # NOTE: don't filter on filtered["error"].isna() here — that column
+        # NOTE: don't filter on filtered["error"].isna() here. that column
         # conflates two different things: genuine "can't compute english %"
         # cases (japanese/chinese-only releases, where pct is always null)
         # with a benign "no hangul content found" tag on fully-english songs
@@ -1002,7 +1033,7 @@ with lookup_col:
             _eng_only_n  = (artist_songs["language_release"] == "English only").sum()
             _eng_only_pct = round(_eng_only_n / max(len(artist_songs), 1) * 100)
 
-            # fitted change across all active years — keeps a single
+            # fitted change across all active years. keeps a single
             # unusually high/low year from making an otherwise-flat artist
             # look like a big mover
             _a_change = round(_a_fit["change"])
@@ -1010,7 +1041,7 @@ with lookup_col:
 
             # does the raw first->last value move the same direction as the
             # fitted trend line? if not, this artist isn't a simple "steady
-            # drift toward X" story — it's a rise-then-fall (or reverse)
+            # drift toward X" story. it's a rise-then-fall (or reverse)
             # shape, and picking one direction to narrate would contradict
             # the very numbers shown next to it (e.g. "down to 36%" when 36
             # is bigger than the starting value)
@@ -1025,8 +1056,8 @@ with lookup_col:
             _endpoint_note = ""
             if _shapes_agree and abs(_raw_diff) >= 10 and _mag < abs(_raw_diff) * 0.7:
                 _endpoint_note = (
-                    f" (just comparing {_a_start_yr} to {_a_end_yr} directly would suggest a bigger "
-                    f"swing — **{_raw_diff:+d} pp**. the **{_a_change:+d} pp** figure instead comes from "
+                    f" \n\n(just comparing {_a_start_yr} to {_a_end_yr} directly would suggest a bigger "
+                    f"change (**{_raw_diff:+d} pp**). the **{_a_change:+d} pp** figure instead comes from "
                     f"fitting a line through *every* year in between, so one unusually high or low year "
                     f"at the very start or end doesn't get to speak for the artist's whole career.)"
                 )
@@ -1037,27 +1068,27 @@ with lookup_col:
                 _direction_word = "toward english" if _a_change > 0 else "toward korean"
                 _sign = "+" if _a_change > 0 else ""
                 _trend_desc = (
-                    f"they've drifted noticeably {_direction_word}: **{_a_start_raw}%** in {_a_start_yr} "
-                    f"to **{_a_end_raw}%** in {_a_end_yr}, a trend of roughly **{_sign}{_a_change} pp** over that span."
+                    f"they've drifted noticeably {_direction_word}: **{_a_start_raw}%** english in {_a_start_yr} "
+                    f"to **{_a_end_raw}%** english in {_a_end_yr}, a trend of roughly **{_sign}{_a_change} pp** over that span."
                     f"{_endpoint_note}"
                 )
             else:
                 # peak/valley shape: raw endpoints go one way, the fitted
-                # trend line goes the other — narrate both instead of
+                # trend line goes the other. narrate both instead of
                 # picking one and contradicting it with the other
                 _trend_line_word = "toward english" if _a_change > 0 else "toward korean"
                 _trend_desc = (
                     f"it's not a straight line: their raw numbers went from **{_a_start_raw}%** in {_a_start_yr} "
                     f"to **{_a_end_raw}%** in {_a_end_yr} (with a peak of **{_a_peak_val}%** in {_a_peak_yr} "
                     f"along the way), but the overall trend line across the whole span actually points "
-                    f"**{_trend_line_word}** (**{_a_change:+d} pp**) — the mid-career swing outweighs where "
+                    f"**{_trend_line_word}** (**{_a_change:+d} pp**). the mid-career swing outweighs where "
                     f"they started and ended."
                 )
 
             if not _a_fit["is_solid"]:
                 _trend_desc += (
-                    " (heads up: this trend isn't statistically solid — their year-to-year english % "
-                    "bounces around too much to call this a confident, consistent pattern rather than noise.)"
+                    " \n\n(**this trend isn't statistically solid**. their year-to-year english % "
+                    "bounces around too much to call this a confident, consistent pattern rather than noise.)\n\n"
                 )
 
             _peak_note = (
@@ -1069,7 +1100,7 @@ with lookup_col:
 
         fig_scatter = px.scatter(
             artist_songs, x="date", y=pct_col, hover_data=["title"],
-            title=f"{artist_choice} — english share per song",
+            title=f"{artist_choice} english share per song",
             labels={pct_col: "% english (per song)", "date": ""},
         )
         fig_scatter.update_yaxes(
@@ -1119,7 +1150,7 @@ with lookup_col:
             lambda x: f"{round(x*100)}%" if pd.notna(x) else "—"
         )
 
-        with st.expander(f"{artist_choice} — {len(artist_data)} songs"):
+        with st.expander(f"{artist_choice}: {len(artist_data)} songs"):
             search = st.text_input(
                 "search songs",
                 key=f"lookup_search_{artist_choice}",
@@ -1162,7 +1193,7 @@ with lookup_col:
                 st.plotly_chart(fig_cmp, use_container_width=True, key="trend_chart_compare")
 
                 with st.expander("see the full spread, not just averages"):
-                    st.caption("each box = the spread of songs that year — median line, middle 50% box, outlier dots.")
+                    st.caption("each box = the spread of songs that year. median line, middle 50% box, outlier dots.")
                     artist_filtered = filtered[filtered["artist"].isin(compare_artists)]
                     fig_box = px.box(artist_filtered, x="year", y=pct_col, color="artist",
                                     labels={pct_col: "% english words per song"},
@@ -1187,7 +1218,7 @@ with lookup_col:
                     adf["% english"] = adf["% english"].apply(
                         lambda x: f"{round(x*100)}%" if pd.notna(x) else "—"
                     )
-                    with st.expander(f"{artist} — {len(adf)} songs"):
+                    with st.expander(f"{artist}: {len(adf)} songs"):
                         search2 = st.text_input("search songs", key=f"compare_search_{artist}",
                                                 placeholder="type to filter...")
                         if search2:
@@ -1240,11 +1271,11 @@ with movers_col:
         if trends_filtered.empty:
             st.info(
                 "no artists in this view have more than 5 songs in the last few "
-                "years — try widening your filters."
+                "years. try widening your filters."
             )
         elif trends_solid.empty:
             st.info(
-                "no artist in this view has a clear, consistent pattern over time right now — "
+                "no artist in this view has a clear, consistent pattern over time right now. "
                 "everyone's year-to-year english % is bouncing around too much to call it a real trend. "
                 "try widening your filters to see more artists."
             )
@@ -1263,12 +1294,12 @@ with movers_col:
                 # consistent trend, none of them are trending
                 # toward korean right now
                 st.markdown(
-                    f"here's the big one: among artists with a clear, consistent pattern over time "
+                    f"among artists with a clear, consistent pattern over time "
                     f"(not just noisy bouncing), **not a single one in this view is trending toward korean** "
                     f"right now. every artist whose english % moves in a real, sustained direction is moving "
-                    f"toward **more english** — **{_top_name}** leads the pack (**+{_top_chg} pp** over their "
+                    f"toward **more english**. **{_top_name}** leads this change (**+{_top_chg} pp** over their "
                     f"career, based on their trend line). artists who *have* drifted toward korean over time "
-                    f"tend to be ones who've gone quiet or disbanded — once you only look at who's still "
+                    f"tend to be ones who've gone quiet or disbanded. once you only look at who's still "
                     f"actively releasing music, the korean-leaning trend disappears."
                 )
             else:
@@ -1319,15 +1350,14 @@ with movers_col:
 
             if top_korean.empty:
                 st.caption(
-                    "👀 every bar here points the same way — that's not a mistake, "
-                    "it's the finding. no artist with a real trend is currently moving toward korean."
+                    "every bar here points the same way. no artist with a real trend is currently moving toward korean."
                 )
 
             st.caption(
                 "ranked by a weighted shift score (trend strength × how much data backs it up), "
                 "so an artist with a few songs and a big swing doesn't outrank one with a lot of songs and a "
                 "consistent change. pp labels show the change implied by each artist's trend line, not just "
-                "their first vs. most recent song — a single viral cover or one-off english single won't throw "
+                "their first vs. most recent song so a single viral cover or one-off english single won't throw "
                 "off the whole picture. "
                 "only includes artists with more than 5 songs in the last few years (so groups that have gone "
                 "quiet don't show up as 'movers') AND a clear, consistent pattern over time (so normal year-to-"
@@ -1359,18 +1389,17 @@ with st.container(border=True):
         .sum()
     )
     st.markdown(
-        f"scroll through and you'll see the pink colors creep rightward over time, but unevenly."
+        f"scroll through and you'll see the pink colors creep rightward over time, but unevenly. "
         f"about **{round(_above50/_total_artists_hm*100)}% of artists** "
         f"({_above50} of {_total_artists_hm}) had at least one year where more than half their "
         f"lyrics were english. meanwhile **{_always_below20} artists** stayed under 20% english "
-        f"every single year they released music. the rows with the wildest color swings "
-        f"usually belong to groups that pivoted strategy mid-career or branched into new markets."
+        f"every single year they released music. "
     )
 
     sort_by = st.selectbox(
         "sort artists by:",
         ["most english overall", "alphabetical", "biggest change over time"],
-        help="sorting only changes row order — the color scale stays the same."
+        help="sorting only changes row order. the color scale stays the same."
     )
 
     pivot = (
@@ -1386,7 +1415,7 @@ with st.container(border=True):
         _hm_trends = trends_df[trends_df["artist"].isin(filtered["artist"].unique())].copy()
 
         # same "still active" + "solid trend" logic as the movers section,
-        # so the two rankings agree — but nobody gets dropped from the
+        # so the two rankings agree but nobody gets dropped from the
         # heatmap itself, they just fall back to a simpler sort key
         _hm_recent_cutoff = str(int(filtered["year"].max()) - 2)
         _hm_recent_counts = (
